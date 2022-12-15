@@ -1,7 +1,9 @@
 import argparse
 import asyncio
+import subprocess as sp
 
 import os
+import fnmatch
 # limit the number of cpus used by high performance libraries
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -20,6 +22,7 @@ from multiprocessing import Process, Queue
 import glob
 from nanoid import generate
 from io import BytesIO
+import datetime #datetime module to fetch current time when frame is detected
 
 import numpy as np
 import cv2 as cv
@@ -48,7 +51,8 @@ from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, LabelEncoder
 from collections import Counter
 
 #face_detection
-import pickledb
+import lmdb
+# import face_lmdb
 import json
 import face_recognition 
 
@@ -80,7 +84,7 @@ logging.getLogger().removeHandler(logging.getLogger().handlers[0])
  # Load model
 device_track=''
 devices = select_device(device_track)
-model = DetectMultiBackend(WEIGHTS / '27Sep_2022.pt', device=devices, dnn=False, data=None, fp16=False)
+model = DetectMultiBackend(WEIGHTS / 'Face_detection.pt', device=devices, dnn=False, data=None, fp16=False)
 stride, names, pt = model.stride, model.names, model.pt
 imgsz = check_img_size((640, 640), s=stride)  # check image size
 
@@ -106,86 +110,106 @@ known_blacklist_faces = []
 known_blacklist_id = []
 face_did_encoding_store = dict()
 track_type = []
+timestamp = []
+video_cid = []
 
-#pickledb_whitelist   
-db_whitelist = pickledb.load("./whitelist.db", True)
-list1 = list(db_whitelist.getall())
+#load lmdb
+env = lmdb.open('/home/nivetheni/Face_detection_pipeline/lmdb/face-detection.lmdb',
+                max_dbs=10, map_size=int(100e9))
+
+# Now create subdbs for known and unknown people.
+known_db = env.open_db(b'known')
+unknown_db = env.open_db(b'unknown')
+
+# Iterate each DB to show the keys are sorted:
+with env.begin() as txn:
+    list1 = list(txn.cursor(db=known_db))
 
 db_count_whitelist = 0
-for name in list1:    
-    # Next we load every file of faces of known person
-    re_image = db_whitelist.get(name)
+for key, value in list1:
+    #fetch from lmdb
+    with env.begin() as txn:
+        re_image = txn.get(key, db=known_db)
 
-    # Deserialization
-    print("Decode JSON serialized NumPy array")
-    decodedArrays = json.loads(re_image)
+        # Deserialization
+        print("Decode JSON serialized NumPy array")
+        decodedArrays = json.loads(re_image)
 
-    finalNumpyArray = np.asarray(decodedArrays["array"],dtype="uint8")
-    
-    # Load an image
-    # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
-    image = finalNumpyArray
-    ratio = np.amax(image) / 256        
-    image = (image / ratio).astype('uint8')
+        finalNumpyArray = np.asarray(decodedArrays["array"], dtype="uint8")
+        
+        # Load an image
+        # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
+        image = finalNumpyArray
+        ratio = np.amax(image) / 256
+        image = (image / ratio).astype('uint8')
 
-    # Get 128-dimension face encoding
-    # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
-    try : 
-        encoding = face_recognition.face_encodings(image)[0]
-    except IndexError as e  :
-        print( "Error ", IndexError , e)
-        continue
+        # Get 128-dimension face encoding
+        # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
+        try :
+            encoding = face_recognition.face_encodings(image)[0]
+        except IndexError as e  :
+            print( "Error ", IndexError , e)
+            continue
 
-    # Append encodings and name
-    known_whitelist_faces.append(encoding)
-    known_whitelist_id.append(name)
-    db_count_whitelist += 1
+        # Append encodings and name
+        known_whitelist_faces.append(encoding)
+        known_whitelist_id.append(key.decode())
+        db_count_whitelist += 1
 print(db_count_whitelist, "total whitelist person")
 
-#pickledb_balcklist  
-db_blacklist = pickledb.load("./blacklist.db", True)
-list1 = list(db_blacklist.getall())
+# Iterate each DB to show the keys are sorted:
+with env.begin() as txn:
+    list2 = list(txn.cursor(db=unknown_db))
 
 db_count_blacklist = 0
-for name in list1:    
-    # Next we load every file of faces of known person
-    re_image = db_blacklist.get(name)
+for key, value in list2:
+    #fetch from lmdb
+    with env.begin() as txn:
+        re_image = txn.get(key, db=unknown_db)
 
-    # Deserialization
-    print("Decode JSON serialized NumPy array")
-    decodedArrays = json.loads(re_image)
+        # Deserialization
+        print("Decode JSON serialized NumPy array")
+        decodedArrays = json.loads(re_image)
 
-    finalNumpyArray = np.asarray(decodedArrays["array"],dtype="uint8")
-    
-    # Load an image
-    # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
-    image = finalNumpyArray
-    ratio = np.amax(image) / 256        
-    image = (image / ratio).astype('uint8')
+        finalNumpyArray = np.asarray(decodedArrays["array"],dtype="uint8")
+        
+        # Load an image
+        # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
+        image = finalNumpyArray
+        ratio = np.amax(image) / 256
+        image = (image / ratio).astype('uint8')
 
-    # Get 128-dimension face encoding
-    # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
-    try : 
-        encoding = face_recognition.face_encodings(image)[0]
-    except IndexError as e  :
-        print( "Error ", IndexError , e)
-        continue
+        # Get 128-dimension face encoding
+        # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
+        try :
+            encoding = face_recognition.face_encodings(image)[0]
+        except IndexError as e  :
+            print( "Error ", IndexError , e)
+            continue
 
-    # Append encodings and name
-    known_blacklist_faces.append(encoding)
-    known_blacklist_id.append(name)
-    db_count_blacklist += 1
+        # Append encodings and name
+        known_blacklist_faces.append(encoding)
+        known_blacklist_id.append(key.decode())
+        db_count_blacklist += 1
 print(db_count_blacklist, "total blacklist person")
+
+# class NumpyArrayEncoder(JSONEncoder):
+#     def default(self, obj):
+#         if isinstance(obj, np.ndarray):
+#             return obj.tolist()
+#         return JSONEncoder.default(self, obj)
 
 @torch.no_grad()
 def run(
-        source = ROOT,
+        source,
         queue1 = Queue(),
         queue2 = Queue(),
         queue3 = Queue(),
         queue4 = Queue(),
         queue5 = Queue(),
-        yolo_weights=WEIGHTS / '27Sep_2022.pt',  # model.pt path(s),
+        queue6 = Queue(),
+        queue7 = Queue(),
+        yolo_weights=WEIGHTS / 'Face_detection.pt',  # model.pt path(s),
         reid_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
         tracking_method='strongsort',
         imgsz=(640, 640),  # inference size (height, width)
@@ -312,8 +336,8 @@ def run(
                 for c in det[:,-1]:
                     global personDid , count_person 
                     if frame_count % 10 == 0: 
-                        if names[int(c)]=="Person":
-                            print("person detected face detection code ")
+                        if names[int(c)]=="Face":
+                            print("person detected starting face detection code ")
                             count_person += 1
                             if count_person>0:
                                 np_bytes2 = BytesIO()
@@ -338,6 +362,8 @@ def run(
                                             print(did, "did 613")
                                             batch_person_id.append(did)
                                             track_type.append("00")
+                                            ct = datetime.datetime.now() # ct stores current time
+                                            timestamp.append(str(ct))
                                             if did in face_did_encoding_store.keys():
                                                 face_did_encoding_store[did].append(face_encoding)
                                                 top_left = (face_location[3], face_location[0])
@@ -361,91 +387,109 @@ def run(
                                                 cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
                                                 
                                         else:
-                                            results_blacklist = face_recognition.compare_faces(known_blacklist_faces, face_encoding, TOLERANCE)
-                                            if True in results_blacklist:
-                                                did = '01'+ str(known_blacklist_id[results_blacklist.index(True)])
-                                                print("did 623", did)
-                                                batch_person_id.append(did)
-                                                track_type.append("01")
-                                                if did in face_did_encoding_store.keys():
-                                                    face_did_encoding_store[did].append(face_encoding)
-                                                    top_left = (face_location[3], face_location[0])
-                                                    bottom_right = (face_location[1], face_location[2])
-                                                    color = [0,255,0]
-                                                    cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
-                                                    top_left = (face_location[3], face_location[2])
-                                                    bottom_right = (face_location[1]+50, face_location[2] + 22)
-                                                    cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
-                                                    cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
-                                                else:
-                                                    face_did_encoding_store[did] = list(face_encoding)
-                                                    top_left = (face_location[3], face_location[0])
-                                                    bottom_right = (face_location[1], face_location[2])
-                                                    color = [0,255,0]
-                                                    cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
-                                                    top_left = (face_location[3], face_location[2])
-                                                    bottom_right = (face_location[1]+50, face_location[2] + 22)
-                                                    cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
-                                                    cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
-                                            else:
-                                                if len(face_did_encoding_store) == 0:
-                                                    did = '10'+ str(generate(size =4 ))
-                                                    print(did, "did 642")
-                                                    track_type.append("10")
+                                            # if face_encoding not in known_blacklist_faces:
+                                                # # Serialization
+                                                # numpyData = {"array": image}
+                                                # encodedNumpyData = json.dumps(numpyData, cls=NumpyArrayEncoder)
+                                                # #push to blacklist lmdb
+                                                # person_name = bytearray(name[0]+ str(count), "utf-8")
+                                                # person_img = bytearray(encodedNumpyData, "utf-8")
+                                                # with env.begin(write=True) as txn:
+                                                #     txn.put(person_name, person_img, db=known_db)
+                                                known_blacklist_faces.append(face_encoding)
+                                            # else:
+                                                results_blacklist = face_recognition.compare_faces(known_blacklist_faces, face_encoding, TOLERANCE)
+                                                if True in results_blacklist:
+                                                    # did = '01'+ str(known_blacklist_id[results_blacklist.index(True)])
+                                                    did = '01'+ str(count_person) + 'bl'
+                                                    print("did 623", did)
                                                     batch_person_id.append(did)
-                                                    face_did_encoding_store[did] = list(face_encoding)
-                                                    top_left = (face_location[3], face_location[0])
-                                                    bottom_right = (face_location[1], face_location[2])
-                                                    color = [0,255,0]
-                                                    cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
-                                                    top_left = (face_location[3], face_location[2])
-                                                    bottom_right = (face_location[1]+50, face_location[2] + 22)
-                                                    cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
-                                                    cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
+                                                    track_type.append("01")
+                                                    ct = datetime.datetime.now() # ct stores current time
+                                                    timestamp.append(str(ct))
+                                                    if did in face_did_encoding_store.keys():
+                                                        face_did_encoding_store[did].append(face_encoding)
+                                                        top_left = (face_location[3], face_location[0])
+                                                        bottom_right = (face_location[1], face_location[2])
+                                                        color = [0,255,0]
+                                                        cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
+                                                        top_left = (face_location[3], face_location[2])
+                                                        bottom_right = (face_location[1]+50, face_location[2] + 22)
+                                                        cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
+                                                        cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
+                                                    else:
+                                                        face_did_encoding_store[did] = list(face_encoding)
+                                                        top_left = (face_location[3], face_location[0])
+                                                        bottom_right = (face_location[1], face_location[2])
+                                                        color = [0,255,0]
+                                                        cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
+                                                        top_left = (face_location[3], face_location[2])
+                                                        bottom_right = (face_location[1]+50, face_location[2] + 22)
+                                                        cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
+                                                        cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
+                                                        
                                                 else:
-                                                    for key, value in face_did_encoding_store.items():
-                                                        print(key,"640")
-                                                        if key.startswith('10'):
-                                                            try :
-                                                                print(type(value),"type vlaue")
-                                                                print(np.shape(np.transpose(np.array(value))), "value 642" ,np.shape(value) ,"value orginal",np.shape(face_encoding), "face_encoding")
-                                                                results_unknown = face_recognition.compare_faces(np.transpose(np.array(value)), face_encoding, TOLERANCE)
-                                                                # results_unknown = face_recognition.compare_faces(np.array(value), face_encoding, TOLERANCE)
-                                                                print(results_unknown,"635")
-                                                                if True in results_unknown:
-                                                                    key_list = list(key)
-                                                                    key_list[1] = '1'
-                                                                    key = str(key_list)
-                                                                    print(key, "did 637")
-                                                                    batch_person_id.append(key)
-                                                                    track_type.append("11")
-                                                                    face_did_encoding_store[key].append(face_encoding)
-                                                                    top_left = (face_location[3], face_location[0])
-                                                                    bottom_right = (face_location[1], face_location[2])
-                                                                    color = [0,255,0]
-                                                                    cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
-                                                                    top_left = (face_location[3], face_location[2])
-                                                                    bottom_right = (face_location[1]+50, face_location[2] + 22)
-                                                                    cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
-                                                                    cv2.putText(im0, key , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
-                                                                else:
-                                                                    did = '10'+ str(generate(size=4))
-                                                                    print(did, "did 642")
-                                                                    batch_person_id.append(did)
-                                                                    face_did_encoding_store[did] = list(face_encoding)
-                                                                    top_left = (face_location[3], face_location[0])
-                                                                    bottom_right = (face_location[1], face_location[2])
-                                                                    color = [0,255,0]
-                                                                    cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
-                                                                    top_left = (face_location[3], face_location[2])
-                                                                    bottom_right = (face_location[1]+50, face_location[2] + 22)
-                                                                    cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
-                                                                    cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
-                                                            except np.AxisError as e:
-                                                                print(e,">> line 562")
-                                                                continue
+                                                    if len(face_did_encoding_store) == 0:
+                                                        did = '10'+ str(generate(size =4 ))
+                                                        print(did, "did 642")
+                                                        track_type.append("10")
+                                                        batch_person_id.append(did)
+                                                        face_did_encoding_store[did] = list(face_encoding)
+                                                        top_left = (face_location[3], face_location[0])
+                                                        bottom_right = (face_location[1], face_location[2])
+                                                        color = [0,255,0]
+                                                        cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
+                                                        top_left = (face_location[3], face_location[2])
+                                                        bottom_right = (face_location[1]+50, face_location[2] + 22)
+                                                        cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
+                                                        cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
+                                                    
+                                                    else:
+                                                        for key, value in face_did_encoding_store.items():
+                                                            print(key,"640")
+                                                            if key.startswith('10'):
+                                                                try :
+                                                                    print(type(value),"type vlaue")
+                                                                    print(np.shape(np.transpose(np.array(value))), "value 642" ,np.shape(value) ,"value orginal",np.shape(face_encoding), "face_encoding")
+                                                                    results_unknown = face_recognition.compare_faces(np.transpose(np.array(value)), face_encoding, TOLERANCE)
+                                                                    # results_unknown = face_recognition.compare_faces(np.array(value), face_encoding, TOLERANCE)
+                                                                    print(results_unknown,"635")
+                                                                    if True in results_unknown:
+                                                                        key_list = list(key)
+                                                                        key_list[1] = '1'
+                                                                        key = str(key_list)
+                                                                        print(key, "did 637")
+                                                                        batch_person_id.append(key)
+                                                                        track_type.append("11")
+                                                                        face_did_encoding_store[key].append(face_encoding)
+                                                                        top_left = (face_location[3], face_location[0])
+                                                                        bottom_right = (face_location[1], face_location[2])
+                                                                        color = [0,255,0]
+                                                                        cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
+                                                                        top_left = (face_location[3], face_location[2])
+                                                                        bottom_right = (face_location[1]+50, face_location[2] + 22)
+                                                                        cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
+                                                                        cv2.putText(im0, key , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
+                                                                    
+                                                                    else:
+                                                                        did = '10'+ str(generate(size=4))
+                                                                        print(did, "did 642")
+                                                                        batch_person_id.append(did)
+                                                                        face_did_encoding_store[did] = list(face_encoding)
+                                                                        top_left = (face_location[3], face_location[0])
+                                                                        bottom_right = (face_location[1], face_location[2])
+                                                                        color = [0,255,0]
+                                                                        cv2.rectangle(im0, top_left, bottom_right, color, FRAME_THICKNESS)
+                                                                        top_left = (face_location[3], face_location[2])
+                                                                        bottom_right = (face_location[1]+50, face_location[2] + 22)
+                                                                        cv2.rectangle(im0, top_left, bottom_right, color, cv2.FILLED)
+                                                                        cv2.putText(im0, did , (face_location[3]+10, face_location[2]+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,0,200), FONT_THICKNESS)
                                                                 
-                                                print(batch_person_id, "batch_person_id")
+                                                                except np.AxisError as e:
+                                                                    print(e,">> line 562")
+                                                                    continue
+                                                        
+                                                    print(batch_person_id, "batch_person_id")
 
                 # pass detections to strongsort
                 t4 = time_sync()
@@ -514,6 +558,15 @@ def run(
 
             # Print time (inference-only)
         LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
+
+    #ipfs
+    print("################################")
+    print(save_path)
+    command = 'ipfs add {file_path} -Q'.format(file_path=save_path)
+    output = sp.getoutput(command)
+    video_cid.append(output)
+    print("################################")
+
         
     #people Count
     sum_count = 0
@@ -549,18 +602,30 @@ def run(
     else:
         detect_count.append(0)
 
-    queue1.put(str(avg_Batchcount_person))
     print(avg_Batchcount_person, "line 325 track")
-    queue2.put(str(avg_Batchcount_vehicel))
-    queue3.put(str(detect_count))
-    queue4.put(str(track_person))
-    queue5.put(str(track_vehicle))
+    queue1.put(str(track_type))
+    queue2.put(str(track_person))
+    queue3.put(str(batch_person_id))
+    queue4.put(str(detect_count))
+    queue5.put(str(avg_Batchcount_person))
+    queue6.put(str(timestamp))
+    queue7.put(str(video_cid))
 
-    avg_Batchcount_person.clear()
-    avg_Batchcount_vehicel.clear()
-    detect_count.clear()
+    print(track_type)
+    print(track_person)
+    print(detect_count)
+    print(batch_person_id)
+    print(avg_Batchcount_person)
+    print(timestamp)
+    print(video_cid)
+
+    track_type.clear()
     track_person.clear()
-    track_vehicle.clear()
+    detect_count.clear()
+    batch_person_id.clear()
+    avg_Batchcount_person.clear()
+    timestamp.clear()
+    video_cid.clear()
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
