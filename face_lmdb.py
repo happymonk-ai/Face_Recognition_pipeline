@@ -16,7 +16,7 @@ api = ipfsApi.Client('127.0.0.1', 5001)
 
 # Open (and create if necessary) our database environment. Must specify
 # max_dbs=... since we're opening subdbs.
-env = lmdb.open('/home/nivetheni/Face_detection_pipeline/lmdb/face-detection.lmdb',
+env = lmdb.open('/app/lmdb/face-detection.lmdb',
                 max_dbs=10, map_size=int(100e9))
 
 # Now create subdbs for known and unknown peole.
