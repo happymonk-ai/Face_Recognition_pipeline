@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import subprocess as sp
+import time
+import ipfsApi
 
 import os
 import fnmatch
@@ -55,6 +57,9 @@ import lmdb
 # import face_lmdb
 import json
 import face_recognition 
+
+#ipfs
+#api = ipfsApi.Client('216.48.181.154', 5001)
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # yolov5 strongsort root directory
@@ -114,84 +119,86 @@ timestamp = []
 video_cid = []
 
 #load lmdb
-env = lmdb.open('/app/lmdb/face-detection.lmdb',
+env = lmdb.open('/home/nivetheni/Face_detection_pipeline/lmdb/face-detection.lmdb',
                 max_dbs=10, map_size=int(100e9))
 
 # Now create subdbs for known and unknown people.
 known_db = env.open_db(b'known')
 unknown_db = env.open_db(b'unknown')
 
-# Iterate each DB to show the keys are sorted:
-with env.begin() as txn:
-    list1 = list(txn.cursor(db=known_db))
-
-db_count_whitelist = 0
-for key, value in list1:
-    #fetch from lmdb
+async def lmdb_known():
+    # Iterate each DB to show the keys are sorted:
     with env.begin() as txn:
-        re_image = txn.get(key, db=known_db)
-
-        # Deserialization
-        print("Decode JSON serialized NumPy array")
-        decodedArrays = json.loads(re_image)
-
-        finalNumpyArray = np.asarray(decodedArrays["array"], dtype="uint8")
+        list1 = list(txn.cursor(db=known_db))
         
-        # Load an image
-        # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
-        image = finalNumpyArray
-        ratio = np.amax(image) / 256
-        image = (image / ratio).astype('uint8')
+    db_count_whitelist = 0
+    for key, value in list1:
+        #fetch from lmdb
+        with env.begin() as txn:
+            re_image = txn.get(key, db=known_db)
+            # Deserialization
+            print("Decode JSON serialized NumPy array")
+            decodedArrays = json.loads(re_image)
+            
+            finalNumpyArray = np.asarray(decodedArrays["array"], dtype="uint8")
+            
+            # Load an image
+            # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
+            image = finalNumpyArray
+            ratio = np.amax(image) / 256
+            image = (image / ratio).astype('uint8')
+            
+            # Get 128-dimension face encoding
+            # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
+            try :
+                encoding = face_recognition.face_encodings(image)[0]
+            except IndexError as e  :
+                print( "Error ", IndexError , e)
+                continue
+            
+            # Append encodings and name
+            known_whitelist_faces.append(encoding)
+            known_whitelist_id.append(key.decode())
+            db_count_whitelist += 1
+            
+    print(db_count_whitelist, "total whitelist person")
 
-        # Get 128-dimension face encoding
-        # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
-        try :
-            encoding = face_recognition.face_encodings(image)[0]
-        except IndexError as e  :
-            print( "Error ", IndexError , e)
-            continue
-
-        # Append encodings and name
-        known_whitelist_faces.append(encoding)
-        known_whitelist_id.append(key.decode())
-        db_count_whitelist += 1
-print(db_count_whitelist, "total whitelist person")
-
-# Iterate each DB to show the keys are sorted:
-with env.begin() as txn:
-    list2 = list(txn.cursor(db=unknown_db))
-
-db_count_blacklist = 0
-for key, value in list2:
-    #fetch from lmdb
+async def lmdb_unknown():
+    # Iterate each DB to show the keys are sorted:
     with env.begin() as txn:
-        re_image = txn.get(key, db=unknown_db)
-
-        # Deserialization
-        print("Decode JSON serialized NumPy array")
-        decodedArrays = json.loads(re_image)
-
-        finalNumpyArray = np.asarray(decodedArrays["array"],dtype="uint8")
+        list2 = list(txn.cursor(db=unknown_db))
         
-        # Load an image
-        # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
-        image = finalNumpyArray
-        ratio = np.amax(image) / 256
-        image = (image / ratio).astype('uint8')
-
-        # Get 128-dimension face encoding
-        # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
-        try :
-            encoding = face_recognition.face_encodings(image)[0]
-        except IndexError as e  :
-            print( "Error ", IndexError , e)
-            continue
-
-        # Append encodings and name
-        known_blacklist_faces.append(encoding)
-        known_blacklist_id.append(key.decode())
-        db_count_blacklist += 1
-print(db_count_blacklist, "total blacklist person")
+    db_count_blacklist = 0
+    for key, value in list2:
+        #fetch from lmdb
+        with env.begin() as txn:
+            re_image = txn.get(key, db=unknown_db)
+            # Deserialization
+            print("Decode JSON serialized NumPy array")
+            decodedArrays = json.loads(re_image)
+            
+            finalNumpyArray = np.asarray(decodedArrays["array"],dtype="uint8")
+            
+            # Load an image
+            # image = face_recognition.load_image_file(f'{KNOWN_FACES_DIR}/{name}/{filename}')
+            image = finalNumpyArray
+            ratio = np.amax(image) / 256
+            image = (image / ratio).astype('uint8')
+            
+            # Get 128-dimension face encoding
+            # Always returns a list of found faces, for this purpose we take first face only (assuming one face per image as you can't be twice on one image)
+            try :
+                encoding = face_recognition.face_encodings(image)[0]
+            except IndexError as e  :
+                print( "Error ", IndexError , e)
+                continue
+            
+            # Append encodings and name
+            known_blacklist_faces.append(encoding)
+            known_blacklist_id.append(key.decode())
+            db_count_blacklist += 1
+    
+    print(db_count_blacklist, "total blacklist person")
 
 # class NumpyArrayEncoder(JSONEncoder):
 #     def default(self, obj):
@@ -401,7 +408,7 @@ def run(
                                                 results_blacklist = face_recognition.compare_faces(known_blacklist_faces, face_encoding, TOLERANCE)
                                                 if True in results_blacklist:
                                                     # did = '01'+ str(known_blacklist_id[results_blacklist.index(True)])
-                                                    did = '01'+ str(count_person) + 'bl'
+                                                    did = '01' + 'blacklist'
                                                     print("did 623", did)
                                                     batch_person_id.append(did)
                                                     track_type.append("01")
@@ -558,15 +565,6 @@ def run(
 
             # Print time (inference-only)
         LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
-
-    #ipfs
-    print("################################")
-    print(save_path)
-    command = 'ipfs add {file_path} -Q'.format(file_path=save_path)
-    output = sp.getoutput(command)
-    video_cid.append(output)
-    print("################################")
-
         
     #people Count
     sum_count = 0
@@ -602,31 +600,6 @@ def run(
     else:
         detect_count.append(0)
 
-    print(avg_Batchcount_person, "line 325 track")
-    queue1.put(str(track_type))
-    queue2.put(str(track_person))
-    queue3.put(str(batch_person_id))
-    queue4.put(str(detect_count))
-    queue5.put(str(avg_Batchcount_person))
-    queue6.put(str(timestamp))
-    queue7.put(str(video_cid))
-
-    print(track_type)
-    print(track_person)
-    print(detect_count)
-    print(batch_person_id)
-    print(avg_Batchcount_person)
-    print(timestamp)
-    print(video_cid)
-
-    track_type.clear()
-    track_person.clear()
-    detect_count.clear()
-    batch_person_id.clear()
-    avg_Batchcount_person.clear()
-    timestamp.clear()
-    video_cid.clear()
-
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms {tracking_method} update per image at shape {(1, 3, *imgsz)}' % t)
@@ -635,6 +608,38 @@ def run(
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     if update:
         strip_optimizer(yolo_weights)  # update model (to fix SourceChangeWarning)
+
+    #ipfs
+    # print("################################")
+    # print(save_path)
+    # command = 'ipfs add ./{file_path} -Q'.format(file_path=save_path)
+    # output = sp.getoutput(command)
+    # video_cid.append(output)
+    # print("################################")
+
+    queue1.put(str(track_type))
+    queue2.put(str(track_person))
+    queue3.put(str(batch_person_id))
+    queue4.put(str(detect_count))
+    queue5.put(str(avg_Batchcount_person))
+    queue6.put(str(timestamp))
+    queue7.put((save_dir))
+
+    print(track_type)
+    print(track_person)
+    print(detect_count)
+    print(batch_person_id)
+    print(avg_Batchcount_person)
+    print(timestamp)
+    # print(video_cid)
+
+    track_type.clear()
+    track_person.clear()
+    detect_count.clear()
+    batch_person_id.clear()
+    avg_Batchcount_person.clear()
+    timestamp.clear()
+    # video_cid.clear()
 
 
 if __name__ == "__main__":
