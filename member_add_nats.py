@@ -28,7 +28,7 @@ data = {
 
 # Open (and create if necessary) our database environment. Must specify
 # max_dbs=... since we're opening subdbs.
-env = lmdb.open('/home/nivetheni/Face_detection_pipeline/lmdb1/face-testing.lmdb',
+env = lmdb.open('/app/lmdb/face-detection.lmdb',
                 max_dbs=10, map_size=int(100e9))
 
 # Now create subdbs for known and unknown peole.
@@ -42,7 +42,7 @@ class NumpyArrayEncoder(JSONEncoder):
         return JSONEncoder.default(self, obj)
 
 # Parent Directory path
-directory = '/home/nivetheni/Face_detection_pipeline/folder'
+directory = '/app/folder'
 
 async def lmdb_push():
     for filename in os.listdir(directory):
