@@ -69,13 +69,6 @@ batch_person_id = []
 timestamp = []
 person_cid = []
 
-queue1 = Queue()
-queue2 = Queue()
-queue3 = Queue()
-queue4 = Queue()
-queue5 = Queue()
-queue6 = Queue()
-
 iterator = 1
 
 #ipfs
@@ -102,7 +95,11 @@ async def json_publish(primary):
     print(f'Ack: stream={ack.stream}, sequence={ack.seq}')
     print("Activity is getting published")
 
-async def Video_creating(file_id, device_id):
+async def Video_creating(file_id, device_data):
+    device_id = device_data[0]
+    device_urn = device_data[1]
+    print(device_id)
+    print(device_urn)
     queue1 = Queue()
     queue2 = Queue()
     queue3 = Queue()
@@ -165,7 +162,7 @@ async def Video_creating(file_id, device_id):
                 "Object":metaObj
     }
     
-    primary = { "deviceid":str(device_id),
+    primary = { "deviceid":str(device_urn),
                 "batchid":str(file_id), 
                 "timestamp":str("Null"), 
                 "metaData": metaBatch}
@@ -180,12 +177,15 @@ async def Video_creating(file_id, device_id):
     # person_cid.clear()
     await asyncio.sleep(1)
 
-async def gst_stream(device_id, location, device_type):
+async def gst_stream(device_id, urn, location, device_type):
 
     def format_location_callback(mux, file_id, data):
+        device_data = []
         global iterator
         if(file_id == iterator):
-            asyncio.run(Video_creating((file_id-1), data))
+            device_data.append(data)
+            device_data.append(urn)
+            asyncio.run(Video_creating((file_id-1), device_data))
             iterator += 1
     try:
         # rtspsrc location='rtsp://happymonk:admin123@streams.ckdr.co.in:3554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif' protocols="tcp" ! rtph264depay ! h264parse ! splitmuxsink location=file-%03d.mp4 max-size-time=60000000000
@@ -197,9 +197,9 @@ async def gst_stream(device_id, location, device_type):
         video_name = path1 + '/' + str(device_id) + '/Nats_video'+str(device_id)
         print(video_name)
         if(device_type == "h.264"):
-            pipeline = Gst.parse_launch('rtspsrc location={location} protocols="tcp" ! rtph264depay ! h264parse ! decodebin ! videoconvert ! videorate ! video/x-raw,framerate=20/1 ! x264enc ! splitmuxsink location={path}-%01d.mp4 max-size-time=10000000000 name=sink-{device_id}'.format(location=location, path=video_name, device_id = device_id))
+            pipeline = Gst.parse_launch('rtspsrc location={location} protocols="tcp" name={device_id} ! rtph264depay name=depay-{device_id} ! h264parse name=parse-{device_id} ! splitmuxsink location={path}-%01d.mp4 max-size-time=10000000000 max-files=10 name=sink-{device_id}'.format(location=location, path=video_name, device_id = device_id))
         elif(device_type == "h.265"):
-            pipeline = Gst.parse_launch('rtspsrc location={location} protocols="tcp" ! rtph265depay ! h265parse ! splitmuxsink location={path}-%01d.mp4 max-size-time=10000000000 name=sink-{device_id}'.format(location=location, path=video_name, device_id = device_id))
+            pipeline = Gst.parse_launch('rtspsrc location={location} protocols="tcp" name={device_id} ! rtph265depay name=depay-{device_id} ! h265parse name=parse-{device_id} ! splitmuxsink location={path}-%01d.mp4 max-size-time=10000000000 max-files=10 name=sink-{device_id}'.format(location=location, path=video_name, device_id = device_id))
 
         sink = pipeline.get_by_name('sink-{device_id}'.format(device_id=device_id))
 
@@ -265,12 +265,14 @@ async def main():
     pipeline.set_state(Gst.State.PLAYING)
 
     i = 3
+    device_urn = 'uuid:eaadf637-a191-4ae7-8156-07433934718b'
     stream_url = os.getenv('RTSP_URL_{id}'.format(id=i))
-    Process(target= await gst_stream(device_id=i ,location=stream_url, device_type=device_types[i]))
+    Process(target= await gst_stream(device_id=i, urn=device_urn, location=stream_url, device_type=device_types[i]))
     time.sleep(5)
     i = 6
+    device_urn = 'uuid:3266ee49-9fc4-d257-0e8d-17a0469a9fc4'
     stream_url = os.getenv('RTSP_URL_{id}'.format(id=i))
-    Process(target= await gst_stream(device_id=i ,location=stream_url, device_type=device_types[i]))
+    Process(target= await gst_stream(device_id=i, urn=device_urn, location=stream_url, device_type=device_types[i]))
     
     try:
         loop.run()
