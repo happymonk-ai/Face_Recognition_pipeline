@@ -24,14 +24,20 @@ from general import (check_requirements_pipeline)
 import logging 
 import threading
 import gc
+import fnmatch
+import subprocess as sp
+import time
+import ipfsApi
 
 # Detection
 from track import run
+from track import lmdb_known
+from track import lmdb_unknown
 
-path = "./Nats_output"
+path1 = "./Nats_output"
 
-if os.path.exists(path) is False:
-    os.mkdir(path)
+if os.path.exists(path1) is False:
+    os.mkdir(path1)
     
 # Multi-threading
 TOLERANCE = 0.62
@@ -72,6 +78,9 @@ queue6 = Queue()
 
 iterator = 1
 
+#ipfs
+# api = ipfsApi.Client('216.48.181.154', 5001)
+
 
 # gstreamer
 # Initializes Gstreamer, it's variables, paths
@@ -103,24 +112,34 @@ async def Video_creating(file_id, device_id):
     queue7 = Queue()
     global avg_Batchcount_person, avg_Batchcount_vehicel,track_person,track_vehicle,detect_count
     file_id_str = str(file_id)
-    video_name = path+'/Nats_video'+str(device_id)+'-'+file_id_str+'.mp4'
+    video_name = path1 +'/Nats_video'+str(device_id)+'-'+file_id_str+'.mp4'
     print(video_name)
     det = Process(target= run(video_name, queue1, queue2, queue3, queue4, queue5, queue6, queue7))
     det.start()
-    type_track = queue1.get()
-    person_track = queue2.get()
-    count_detect = queue3.get()
-    person_id_batch = queue4.get()
-    Batchcount_person_avg = queue5.get()
-    time = queue6.get()
-    cid_person = queue7.get()
-    track_type.append(type_track)
-    track_person.append(person_track)
-    batch_person_id.append(person_id_batch)
-    detect_count.append(count_detect)
-    avg_Batchcount_person.append(Batchcount_person_avg)
-    timestamp.append(time)
-    person_cid.append(cid_person)
+    track_type = queue1.get()
+    track_person = queue2.get()
+    detect_count = queue3.get()
+    batch_person_id = queue4.get()
+    avg_Batchcount_person = queue5.get()
+    timestamp = queue6.get()
+    file_path = queue7.get()
+    #ipfs
+    # print("################################")
+    # file_path = save_dir
+    # print(file_path)
+    for path, dirs, files in os.walk(os.path.abspath(file_path)):
+        for filename in fnmatch.filter(files, "*.mp4"):
+            src_file = os.path.join(file_path, filename)
+            print(src_file)
+            # res = api.add(src_file)
+            # print(res)
+            # res_cid = res[0]['Hash']
+            # print(res_cid)
+            command = 'ipfs --api=/ip4/216.48.181.154/tcp/5001 add {file_path} -Q'.format(file_path=src_file)
+            output = sp.getoutput(command)
+            person_cid = output
+            # video_cid.append(res_cid)
+    # print("################################")
     metapeople ={
                     "type":str(track_type),
                     "track":str(track_person),
@@ -152,13 +171,13 @@ async def Video_creating(file_id, device_id):
                 "metaData": metaBatch}
     print(primary)
     Process(target= await json_publish(primary=primary)).start()
-    track_type.clear()
-    track_person.clear()
-    detect_count.clear()
-    batch_person_id.clear()
-    avg_Batchcount_person.clear()
-    timestamp.clear()
-    person_cid.clear()
+    # track_type.clear()
+    # track_person.clear()
+    # detect_count.clear()
+    # batch_person_id.clear()
+    # avg_Batchcount_person.clear()
+    # timestamp.clear()
+    # person_cid.clear()
     await asyncio.sleep(1)
 
 async def gst_stream(device_id, location, device_type):
@@ -171,7 +190,7 @@ async def gst_stream(device_id, location, device_type):
     try:
         # rtspsrc location='rtsp://happymonk:admin123@streams.ckdr.co.in:3554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif' protocols="tcp" ! rtph264depay ! h264parse ! splitmuxsink location=file-%03d.mp4 max-size-time=60000000000
         # pipeline = Gst.parse_launch('filesrc location={location} name={device_id} ! decodebin name=decode-{device_id} ! videoconvert name=convert-{device_id} ! videoscale name=scale-{device_id} ! video/x-raw, format=GRAY8, width = 1080, height = 1080 ! appsink name=sink-{device_id}'.format(location=location, device_id=device_id))
-        video_name = path+'/Nats_video'+str(device_id)
+        video_name = path1 +'/Nats_video'+str(device_id)
         if(device_type == "h.264"):
             pipeline = Gst.parse_launch('rtspsrc location={location} protocols="tcp" ! rtph264depay ! h264parse ! decodebin ! videoconvert ! videorate ! video/x-raw,framerate=20/1 ! x264enc ! splitmuxsink location={path}-%01d.mp4 max-size-time=10000000000 name=sink'.format(location=location, path=video_name))
         elif(device_type == "h.265"):
@@ -221,6 +240,9 @@ def on_message(bus: Gst.Bus, message: Gst.Message, loop: GLib.MainLoop):
     return True
 
 async def main():
+    
+    await lmdb_known()
+    await lmdb_unknown()
     
     pipeline = Gst.parse_launch('fakesrc ! queue ! fakesink')
 
